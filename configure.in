@@ -17,21 +17,25 @@ dnl Read the Autoconf manual for details.
 dnl
 m4_pattern_forbid(^PGAC_)dnl to catch undefined macros
 
-AC_INIT([PostgreSQL], [13devel], [pgsql-bugs@lists.postgresql.org])
+AC_INIT([PostgreSQL], [13devel], [pgsql-bugs@lists.postgresql.org], [], [https://www.postgresql.org/])
 
 m4_if(m4_defn([m4_PACKAGE_VERSION]), [2.69], [], [m4_fatal([Autoconf version 2.69 is required.
 Untested combinations of 'autoconf' and PostgreSQL versions are not
 recommended.  You can remove the check from 'configure.in' but it is then
 your responsibility whether the result works or not.])])
-AC_COPYRIGHT([Copyright (c) 1996-2019, PostgreSQL Global Development Group])
+AC_COPYRIGHT([Copyright (c) 1996-2020, PostgreSQL Global Development Group])
 AC_CONFIG_SRCDIR([src/backend/access/common/heaptuple.c])
 AC_CONFIG_AUX_DIR(config)
 AC_PREFIX_DEFAULT(/usr/local/pgsql)
-AC_SUBST(configure_args, [$ac_configure_args])
+AC_DEFINE_UNQUOTED(CONFIGURE_ARGS, ["$ac_configure_args"], [Saved arguments from configure])
 
 [PG_MAJORVERSION=`expr "$PACKAGE_VERSION" : '\([0-9][0-9]*\)'`]
+[PG_MINORVERSION=`expr "$PACKAGE_VERSION" : '.*\.\([0-9][0-9]*\)'`]
+test -n "$PG_MINORVERSION" || PG_MINORVERSION=0
 AC_SUBST(PG_MAJORVERSION)
 AC_DEFINE_UNQUOTED(PG_MAJORVERSION, "$PG_MAJORVERSION", [PostgreSQL major version as a string])
+AC_DEFINE_UNQUOTED(PG_MAJORVERSION_NUM, $PG_MAJORVERSION, [PostgreSQL major version number])
+AC_DEFINE_UNQUOTED(PG_MINORVERSION_NUM, $PG_MINORVERSION, [PostgreSQL minor version number])
 
 PGAC_ARG_REQ(with, extra-version, [STRING], [append STRING to version],
              [PG_VERSION="$PACKAGE_VERSION$withval"],
@@ -79,7 +83,7 @@ PostgreSQL has apparently not been ported to your platform yet.
 To try a manual configuration, look into the src/template directory
 for a similar platform and use the '--with-template=' option.
 
-Please also contact <pgsql-bugs@lists.postgresql.org> to see about
+Please also contact <]AC_PACKAGE_BUGREPORT[> to see about
 rectifying this.  Include the above 'checking host system type...'
 line.
 *******************************************************************
@@ -875,6 +879,7 @@ if test "$PORTNAME" = "win32"; then
     with_readline=no
   fi
 fi
+AC_SUBST(with_readline)
 
 
 #
@@ -1279,14 +1284,13 @@ AC_CHECK_HEADERS(m4_normalize([
 	atomic.h
 	copyfile.h
 	execinfo.h
-	fp_class.h
 	getopt.h
-	ieeefp.h
 	ifaddrs.h
 	langinfo.h
 	mbarrier.h
 	poll.h
 	sys/epoll.h
+	sys/event.h
 	sys/ipc.h
 	sys/prctl.h
 	sys/procctl.h
@@ -1300,8 +1304,6 @@ AC_CHECK_HEADERS(m4_normalize([
 	sys/un.h
 	termios.h
 	ucred.h
-	utime.h
-	wchar.h
 	wctype.h
 ]))
 
@@ -1460,8 +1462,6 @@ m4_defun([AC_PROG_CC_STDC], []) dnl We don't want that.
 AC_C_BIGENDIAN
 AC_C_INLINE
 PGAC_PRINTF_ARCHETYPE
-AC_C_FLEXIBLE_ARRAY_MEMBER
-PGAC_C_SIGNED
 PGAC_C_FUNCNAME_SUPPORT
 PGAC_C_STATIC_ASSERT
 PGAC_C_TYPEOF
@@ -1475,8 +1475,6 @@ PGAC_STRUCT_SOCKADDR_UN
 PGAC_STRUCT_SOCKADDR_STORAGE
 PGAC_STRUCT_SOCKADDR_STORAGE_MEMBERS
 PGAC_STRUCT_ADDRINFO
-AC_TYPE_INTPTR_T
-AC_TYPE_UINTPTR_T
 
 PGAC_TYPE_LOCALE_T
 
@@ -1620,16 +1618,15 @@ LIBS=`echo "$LIBS" | sed -e 's/-ledit//g' -e 's/-lreadline//g'`
 
 AC_CHECK_FUNCS(m4_normalize([
 	backtrace_symbols
-	cbrt
 	clock_gettime
 	copyfile
 	fdatasync
 	getifaddrs
 	getpeerucred
 	getrlimit
+	kqueue
 	mbstowcs_l
 	memset_s
-	memmove
 	poll
 	posix_fallocate
 	ppoll
@@ -1645,8 +1642,6 @@ AC_CHECK_FUNCS(m4_normalize([
 	symlink
 	sync_file_range
 	uselocale
-	utime
-	utimes
 	wcstombs_l
 ]))
 
@@ -1659,16 +1654,9 @@ PGAC_CHECK_BUILTIN_FUNC([__builtin_clz], [unsigned int x])
 PGAC_CHECK_BUILTIN_FUNC([__builtin_ctz], [unsigned int x])
 PGAC_CHECK_BUILTIN_FUNC([__builtin_popcount], [unsigned int x])
 
-AC_REPLACE_FUNCS(fseeko)
-case $host_os in
-	# NetBSD uses a custom fseeko/ftello built on fsetpos/fgetpos
-	# Mingw uses macros to access Win32 API calls
-	netbsd*|mingw*)
-		AC_DEFINE(HAVE_FSEEKO, 1, [Define to 1 because replacement version used.])
-		ac_cv_func_fseeko=yes;;
-	*)
-		AC_FUNC_FSEEKO;;
-esac
+# We require 64-bit fseeko() to be available, but run this check anyway
+# in case it finds that _LARGEFILE_SOURCE has to be #define'd for that.
+AC_FUNC_FSEEKO
 
 # posix_fadvise() is a no-op on Solaris, so don't incur function overhead
 # by calling it, 2009-04-02
@@ -1705,25 +1693,6 @@ if test "$pgac_cv_var_PS_STRINGS" = yes ; then
   AC_DEFINE([HAVE_PS_STRINGS], 1, [Define to 1 if the PS_STRINGS thing exists.])
 fi
 
-
-dnl Cannot use AC_CHECK_FUNC because isinf may be a macro
-AC_CACHE_CHECK([for isinf], ac_cv_func_isinf,
-[AC_LINK_IFELSE([AC_LANG_PROGRAM([
-#include <math.h>
-double glob_double;
-],
-[return isinf(glob_double) ? 0 : 1;])],
-[ac_cv_func_isinf=yes],
-[ac_cv_func_isinf=no])])
-
-if test $ac_cv_func_isinf = yes ; then
-  AC_DEFINE(HAVE_ISINF, 1, [Define to 1 if you have isinf().])
-else
-  AC_LIBOBJ(isinf)
-  # Look for a way to implement a substitute for isinf()
-  AC_CHECK_FUNCS([fpclass fp_class fp_class_d class], [break])
-fi
-
 AC_REPLACE_FUNCS(m4_normalize([
 	dlopen
 	explicit_bzero
@@ -1732,11 +1701,11 @@ AC_REPLACE_FUNCS(m4_normalize([
 	getpeereid
 	getrusage
 	inet_aton
+	link
 	mkdtemp
 	pread
 	pwrite
 	random
-	rint
 	srandom
 	strlcat
 	strlcpy
@@ -1873,7 +1842,7 @@ fi
 LIBS="$LIBS_including_readline"
 
 if test "$with_readline" = yes; then
-  PGAC_VAR_RL_COMPLETION_APPEND_CHARACTER
+  PGAC_READLINE_VARIABLES
   AC_CHECK_FUNCS([rl_completion_matches rl_filename_completion_function rl_reset_screen_size])
   AC_CHECK_FUNCS([append_history history_truncate_file])
 fi
@@ -2353,8 +2322,7 @@ AC_DEFINE_UNQUOTED(PG_VERSION_STR,
 
 # Supply a numeric version string for use by 3rd party add-ons
 # awk -F is a regex on some platforms, and not on others, so make "." a tab
-[PG_VERSION_NUM="`echo "$PACKAGE_VERSION" | sed 's/[A-Za-z].*$//' |
-tr '.' '	' |
+[PG_VERSION_NUM="`echo $PG_MAJORVERSION $PG_MINORVERSION |
 $AWK '{printf "%d%04d", $1, $2}'`"]
 AC_DEFINE_UNQUOTED(PG_VERSION_NUM, $PG_VERSION_NUM, [PostgreSQL version as a number])
 AC_SUBST(PG_VERSION_NUM)

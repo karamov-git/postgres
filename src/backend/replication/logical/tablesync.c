@@ -2,7 +2,7 @@
  * tablesync.c
  *	  PostgreSQL logical replication
  *
- * Copyright (c) 2012-2019, PostgreSQL Global Development Group
+ * Copyright (c) 2012-2020, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  src/backend/replication/logical/tablesync.c
@@ -761,6 +761,7 @@ copy_table(Relation rel)
 	/* Map the publisher relation to local one. */
 	relmapentry = logicalrep_rel_open(lrel.remoteid, NoLock);
 	Assert(rel == relmapentry->localrel);
+	Assert(relmapentry->localrel->rd_rel->relkind == RELKIND_RELATION);
 
 	/* Start copy on the publisher. */
 	initStringInfo(&cmd);
@@ -777,8 +778,8 @@ copy_table(Relation rel)
 	copybuf = makeStringInfo();
 
 	pstate = make_parsestate(NULL);
-	addRangeTableEntryForRelation(pstate, rel, AccessShareLock,
-								  NULL, false, false);
+	(void) addRangeTableEntryForRelation(pstate, rel, AccessShareLock,
+										 NULL, false, false);
 
 	attnamelist = make_copy_attnamelist(relmapentry);
 	cstate = BeginCopyFrom(pstate, rel, NULL, false, copy_read_data, attnamelist, NIL);

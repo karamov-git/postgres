@@ -37,7 +37,7 @@
  * record, wait for it to be replicated to the standby, and then exit.
  *
  *
- * Portions Copyright (c) 2010-2019, PostgreSQL Global Development Group
+ * Portions Copyright (c) 2010-2020, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  src/backend/replication/walsender.c
@@ -85,6 +85,7 @@
 #include "storage/procarray.h"
 #include "tcop/dest.h"
 #include "tcop/tcopprot.h"
+#include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
@@ -191,7 +192,6 @@ static volatile sig_atomic_t got_STOPPING = false;
 static volatile sig_atomic_t replication_active = false;
 
 static LogicalDecodingContext *logical_decoding_ctx = NULL;
-static XLogRecPtr logical_startptr = InvalidXLogRecPtr;
 
 /* A sample associating a WAL location with the time it was written. */
 typedef struct
@@ -564,7 +564,7 @@ StartReplication(StartReplicationCmd *cmd)
 		if (SlotIsLogical(MyReplicationSlot))
 			ereport(ERROR,
 					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-					 (errmsg("cannot use a logical replication slot for physical replication"))));
+					 errmsg("cannot use a logical replication slot for physical replication")));
 	}
 
 	/*
@@ -1075,8 +1075,11 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 static void
 DropReplicationSlot(DropReplicationSlotCmd *cmd)
 {
+	QueryCompletion qc;
+
 	ReplicationSlotDrop(cmd->slotname, !cmd->wait);
-	EndCommand("DROP_REPLICATION_SLOT", DestRemote);
+	SetQueryCompletion(&qc, CMDTAG_DROP_REPLICATION_SLOT, 0);
+	EndCommand(&qc, DestRemote, false);
 }
 
 /*
@@ -1087,6 +1090,7 @@ static void
 StartLogicalReplication(StartReplicationCmd *cmd)
 {
 	StringInfoData buf;
+	QueryCompletion qc;
 
 	/* make sure that our requirements are still fulfilled */
 	CheckLogicalDecodingRequirements();
@@ -1130,9 +1134,9 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 	pq_endmessage(&buf);
 	pq_flush();
 
-
 	/* Start reading WAL from the oldest required WAL. */
-	logical_startptr = MyReplicationSlot->data.restart_lsn;
+	XLogBeginRead(logical_decoding_ctx->reader,
+				  MyReplicationSlot->data.restart_lsn);
 
 	/*
 	 * Report the location after which we'll send out further commits as the
@@ -1161,7 +1165,8 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 	WalSndSetState(WALSNDSTATE_STARTUP);
 
 	/* Get out of COPY mode (CommandComplete). */
-	EndCommand("COPY 0", DestRemote);
+	SetQueryCompletion(&qc, CMDTAG_COPY, 0);
+	EndCommand(&qc, DestRemote, false);
 }
 
 /*
@@ -1465,6 +1470,7 @@ exec_replication_command(const char *cmd_string)
 	Node	   *cmd_node;
 	MemoryContext cmd_context;
 	MemoryContext old_context;
+	QueryCompletion qc;
 
 	/*
 	 * If WAL sender has been told that shutdown is getting close, switch its
@@ -1500,8 +1506,8 @@ exec_replication_command(const char *cmd_string)
 	if (parse_rc != 0)
 		ereport(ERROR,
 				(errcode(ERRCODE_SYNTAX_ERROR),
-				 (errmsg_internal("replication command parser returned %d",
-								  parse_rc))));
+				 errmsg_internal("replication command parser returned %d",
+								 parse_rc)));
 
 	cmd_node = replication_parse_result;
 
@@ -1615,7 +1621,8 @@ exec_replication_command(const char *cmd_string)
 	MemoryContextDelete(cmd_context);
 
 	/* Send CommandComplete message */
-	EndCommand("SELECT", DestRemote);
+	SetQueryCompletion(&qc, CMDTAG_SELECT, 0);
+	EndCommand(&qc, DestRemote, true);
 
 	/* Report to pgstat that this process is now idle */
 	pgstat_report_activity(STATE_IDLE, NULL);
@@ -2762,7 +2769,7 @@ retry:
 
 		snprintf(activitymsg, sizeof(activitymsg), "streaming %X/%X",
 				 (uint32) (sentPtr >> 32), (uint32) sentPtr);
-		set_ps_display(activitymsg, false);
+		set_ps_display(activitymsg);
 	}
 }
 
@@ -2774,7 +2781,14 @@ XLogSendLogical(void)
 {
 	XLogRecord *record;
 	char	   *errm;
-	XLogRecPtr	flushPtr;
+
+	/*
+	 * We'll use the current flush point to determine whether we've caught up.
+	 * This variable is static in order to cache it across calls.  Caching is
+	 * helpful because GetFlushRecPtr() needs to acquire a heavily-contended
+	 * spinlock.
+	 */
+	static XLogRecPtr flushPtr = InvalidXLogRecPtr;
 
 	/*
 	 * Don't know whether we've caught up yet. We'll set WalSndCaughtUp to
@@ -2784,17 +2798,11 @@ XLogSendLogical(void)
 	 */
 	WalSndCaughtUp = false;
 
-	record = XLogReadRecord(logical_decoding_ctx->reader, logical_startptr, &errm);
-	logical_startptr = InvalidXLogRecPtr;
+	record = XLogReadRecord(logical_decoding_ctx->reader, &errm);
 
 	/* xlog record was invalid */
 	if (errm != NULL)
 		elog(ERROR, "%s", errm);
-
-	/*
-	 * We'll use the current flush point to determine whether we've caught up.
-	 */
-	flushPtr = GetFlushRecPtr();
 
 	if (record != NULL)
 	{
@@ -2808,7 +2816,16 @@ XLogSendLogical(void)
 		sentPtr = logical_decoding_ctx->reader->EndRecPtr;
 	}
 
-	/* Set flag if we're caught up. */
+	/*
+	 * If first time through in this session, initialize flushPtr.  Otherwise,
+	 * we only need to update flushPtr if EndRecPtr is past it.
+	 */
+	if (flushPtr == InvalidXLogRecPtr)
+		flushPtr = GetFlushRecPtr();
+	else if (logical_decoding_ctx->reader->EndRecPtr >= flushPtr)
+		flushPtr = GetFlushRecPtr();
+
+	/* If EndRecPtr is still past our flushPtr, it means we caught up. */
 	if (logical_decoding_ctx->reader->EndRecPtr >= flushPtr)
 		WalSndCaughtUp = true;
 
@@ -2858,8 +2875,11 @@ WalSndDone(WalSndSendDataCallback send_data)
 	if (WalSndCaughtUp && sentPtr == replicatedPtr &&
 		!pq_is_send_pending())
 	{
+		QueryCompletion qc;
+
 		/* Inform the standby that XLOG streaming is done */
-		EndCommand("COPY 0", DestRemote);
+		SetQueryCompletion(&qc, CMDTAG_COPY, 0);
+		EndCommand(&qc, DestRemote, false);
 		pq_flush();
 
 		proc_exit(0);
@@ -3196,8 +3216,7 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 	if (!(rsinfo->allowedModes & SFRM_Materialize))
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("materialize mode required, but it is not " \
-						"allowed in this context")));
+				 errmsg("materialize mode required, but it is not allowed in this context")));
 
 	/* Build a tuple descriptor for our result type */
 	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)

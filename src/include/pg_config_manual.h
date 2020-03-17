@@ -6,7 +6,7 @@
  * for developers.  If you edit any of these, be sure to do a *full*
  * rebuild (and an initdb if noted).
  *
- * Portions Copyright (c) 1996-2019, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2020, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/pg_config_manual.h
@@ -130,13 +130,6 @@
 #endif
 
 /*
- * Define this if your operating system supports link()
- */
-#if !defined(WIN32) && !defined(__CYGWIN__)
-#define HAVE_WORKING_LINK 1
-#endif
-
-/*
  * USE_POSIX_FADVISE controls whether Postgres will attempt to use the
  * posix_fadvise() kernel call.  Usually the automatic configure tests are
  * sufficient, but some older Linux distributions had broken versions of
@@ -191,6 +184,11 @@
  * directory.  But if you just hate the idea of sockets in /tmp,
  * here's where to twiddle it.  You can also override this at runtime
  * with the postmaster's -k switch.
+ *
+ * If set to an empty string, then AF_UNIX sockets are not used by default: A
+ * server will not create an AF_UNIX socket unless the run-time configuration
+ * is changed, a client will connect via TCP/IP by default and will only use
+ * an AF_UNIX socket if one is explicitly specified.
  */
 #define DEFAULT_PGSOCKET_DIR  "/tmp"
 

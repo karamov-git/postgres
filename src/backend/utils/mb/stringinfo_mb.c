@@ -8,7 +8,7 @@
  * code.
  *
  *
- * Portions Copyright (c) 1996-2019, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2020, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -26,7 +26,7 @@
 /*
  * appendStringInfoStringQuoted
  *
- * Append up to maxlen characters from s to str, or the whole input string if
+ * Append up to maxlen bytes from s to str, or the whole input string if
  * maxlen <= 0, adding single quotes around it and doubling all single quotes.
  * Add an ellipsis if the copy is incomplete.
  */

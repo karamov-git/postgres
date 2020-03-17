@@ -26,7 +26,7 @@
  *	before ExecutorEnd.  This can be omitted only in case of EXPLAIN,
  *	which should also omit ExecutorRun.
  *
- * Portions Copyright (c) 1996-2019, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2020, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -787,11 +787,11 @@ ExecCheckXactReadOnly(PlannedStmt *plannedstmt)
 		if (isTempNamespace(get_rel_namespace(rte->relid)))
 			continue;
 
-		PreventCommandIfReadOnly(CreateCommandTag((Node *) plannedstmt));
+		PreventCommandIfReadOnly(CreateCommandName((Node *) plannedstmt));
 	}
 
 	if (plannedstmt->commandType != CMD_SELECT || plannedstmt->hasModifyingCTE)
-		PreventCommandIfParallelMode(CreateCommandTag((Node *) plannedstmt));
+		PreventCommandIfParallelMode(CreateCommandName((Node *) plannedstmt));
 }
 
 
@@ -1101,10 +1101,10 @@ CheckValidResultRel(ResultRelInfo *resultRelInfo, CmdType operation)
 
 			/*
 			 * Okay only if there's a suitable INSTEAD OF trigger.  Messages
-			 * here should match rewriteHandler.c's rewriteTargetView, except
-			 * that we omit errdetail because we haven't got the information
-			 * handy (and given that we really shouldn't get here anyway, it's
-			 * not worth great exertion to get).
+			 * here should match rewriteHandler.c's rewriteTargetView and
+			 * RewriteQuery, except that we omit errdetail because we haven't
+			 * got the information handy (and given that we really shouldn't
+			 * get here anyway, it's not worth great exertion to get).
 			 */
 			switch (operation)
 			{
@@ -1957,8 +1957,9 @@ ExecConstraints(ResultRelInfo *resultRelInfo,
 
 				ereport(ERROR,
 						(errcode(ERRCODE_NOT_NULL_VIOLATION),
-						 errmsg("null value in column \"%s\" violates not-null constraint",
-								NameStr(att->attname)),
+						 errmsg("null value in column \"%s\" of relation \"%s\" violates not-null constraint",
+								NameStr(att->attname),
+								RelationGetRelationName(orig_rel)),
 						 val_desc ? errdetail("Failing row contains %s.", val_desc) : 0,
 						 errtablecol(orig_rel, attrChk)));
 			}
@@ -2887,38 +2888,24 @@ EvalPlanQualStart(EPQState *epqstate, Plan *planTree)
 	}
 
 	/*
-	 * These arrays are reused across different plans set with
-	 * EvalPlanQualSetPlan(), which is safe because they all use the same
-	 * parent EState. Therefore we can reuse if already allocated.
-	 */
-	if (epqstate->relsubs_rowmark == NULL)
-	{
-		Assert(epqstate->relsubs_done == NULL);
-		epqstate->relsubs_rowmark = (ExecAuxRowMark **)
-			palloc0(rtsize * sizeof(ExecAuxRowMark *));
-		epqstate->relsubs_done = (bool *)
-			palloc0(rtsize * sizeof(bool));
-	}
-	else
-	{
-		Assert(epqstate->relsubs_done != NULL);
-		memset(epqstate->relsubs_rowmark, 0,
-			   rtsize * sizeof(ExecAuxRowMark *));
-		memset(epqstate->relsubs_done, 0,
-			   rtsize * sizeof(bool));
-	}
-
-	/*
 	 * Build an RTI indexed array of rowmarks, so that
 	 * EvalPlanQualFetchRowMark() can efficiently access the to be fetched
 	 * rowmark.
 	 */
+	epqstate->relsubs_rowmark = (ExecAuxRowMark **)
+		palloc0(rtsize * sizeof(ExecAuxRowMark *));
 	foreach(l, epqstate->arowMarks)
 	{
 		ExecAuxRowMark *earm = (ExecAuxRowMark *) lfirst(l);
 
 		epqstate->relsubs_rowmark[earm->rowmark->rti - 1] = earm;
 	}
+
+	/*
+	 * Initialize per-relation EPQ tuple states to not-fetched.
+	 */
+	epqstate->relsubs_done = (bool *)
+		palloc0(rtsize * sizeof(bool));
 
 	/*
 	 * Initialize the private state information for all the nodes in the part
@@ -2988,7 +2975,9 @@ EvalPlanQualEnd(EPQState *epqstate)
 	FreeExecutorState(estate);
 
 	/* Mark EPQState idle */
+	epqstate->origslot = NULL;
 	epqstate->recheckestate = NULL;
 	epqstate->recheckplanstate = NULL;
-	epqstate->origslot = NULL;
+	epqstate->relsubs_rowmark = NULL;
+	epqstate->relsubs_done = NULL;
 }

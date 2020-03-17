@@ -11,7 +11,7 @@
  *			- Add a pgstat config column to pg_database, so this
  *			  entire thing can be enabled/disabled on a per db basis.
  *
- *	Copyright (c) 2001-2019, PostgreSQL Global Development Group
+ *	Copyright (c) 2001-2020, PostgreSQL Global Development Group
  *
  *	src/backend/postmaster/pgstat.c
  * ----------
@@ -601,6 +601,9 @@ retry2:
 	}
 
 	pg_freeaddrinfo_all(hints.ai_family, addrs);
+
+	/* Now that we have a long-lived socket, tell fd.c about it. */
+	ReserveExternalFD();
 
 	return;
 
@@ -2889,62 +2892,7 @@ pgstat_bestart(void)
 	 * out-of-line data.  Those have to be handled separately, below.
 	 */
 	lbeentry.st_procpid = MyProcPid;
-
-	if (MyBackendId != InvalidBackendId)
-	{
-		if (IsAutoVacuumLauncherProcess())
-		{
-			/* Autovacuum Launcher */
-			lbeentry.st_backendType = B_AUTOVAC_LAUNCHER;
-		}
-		else if (IsAutoVacuumWorkerProcess())
-		{
-			/* Autovacuum Worker */
-			lbeentry.st_backendType = B_AUTOVAC_WORKER;
-		}
-		else if (am_walsender)
-		{
-			/* Wal sender */
-			lbeentry.st_backendType = B_WAL_SENDER;
-		}
-		else if (IsBackgroundWorker)
-		{
-			/* bgworker */
-			lbeentry.st_backendType = B_BG_WORKER;
-		}
-		else
-		{
-			/* client-backend */
-			lbeentry.st_backendType = B_BACKEND;
-		}
-	}
-	else
-	{
-		/* Must be an auxiliary process */
-		Assert(MyAuxProcType != NotAnAuxProcess);
-		switch (MyAuxProcType)
-		{
-			case StartupProcess:
-				lbeentry.st_backendType = B_STARTUP;
-				break;
-			case BgWriterProcess:
-				lbeentry.st_backendType = B_BG_WRITER;
-				break;
-			case CheckpointerProcess:
-				lbeentry.st_backendType = B_CHECKPOINTER;
-				break;
-			case WalWriterProcess:
-				lbeentry.st_backendType = B_WAL_WRITER;
-				break;
-			case WalReceiverProcess:
-				lbeentry.st_backendType = B_WAL_RECEIVER;
-				break;
-			default:
-				elog(FATAL, "unrecognized process type: %d",
-					 (int) MyAuxProcType);
-		}
-	}
-
+	lbeentry.st_backendType = MyBackendType;
 	lbeentry.st_proc_start_timestamp = MyStartTimestamp;
 	lbeentry.st_activity_start_timestamp = 0;
 	lbeentry.st_state_start_timestamp = 0;
@@ -3697,6 +3645,9 @@ pgstat_get_wait_client(WaitEventClient w)
 		case WAIT_EVENT_CLIENT_WRITE:
 			event_name = "ClientWrite";
 			break;
+		case WAIT_EVENT_GSS_OPEN_SERVER:
+			event_name = "GSSOpenServer";
+			break;
 		case WAIT_EVENT_LIBPQWALRECEIVER_CONNECT:
 			event_name = "LibPQWalReceiverConnect";
 			break;
@@ -3714,9 +3665,6 @@ pgstat_get_wait_client(WaitEventClient w)
 			break;
 		case WAIT_EVENT_WAL_SENDER_WRITE_DATA:
 			event_name = "WalSenderWriteData";
-			break;
-		case WAIT_EVENT_GSS_OPEN_SERVER:
-			event_name = "GSSOpenServer";
 			break;
 			/* no default case, so that compiler will warn */
 	}
@@ -4266,48 +4214,6 @@ pgstat_get_crashed_backend_activity(int pid, char *buffer, int buflen)
 	return NULL;
 }
 
-const char *
-pgstat_get_backend_desc(BackendType backendType)
-{
-	const char *backendDesc = "unknown process type";
-
-	switch (backendType)
-	{
-		case B_AUTOVAC_LAUNCHER:
-			backendDesc = "autovacuum launcher";
-			break;
-		case B_AUTOVAC_WORKER:
-			backendDesc = "autovacuum worker";
-			break;
-		case B_BACKEND:
-			backendDesc = "client backend";
-			break;
-		case B_BG_WORKER:
-			backendDesc = "background worker";
-			break;
-		case B_BG_WRITER:
-			backendDesc = "background writer";
-			break;
-		case B_CHECKPOINTER:
-			backendDesc = "checkpointer";
-			break;
-		case B_STARTUP:
-			backendDesc = "startup";
-			break;
-		case B_WAL_RECEIVER:
-			backendDesc = "walreceiver";
-			break;
-		case B_WAL_SENDER:
-			backendDesc = "walsender";
-			break;
-		case B_WAL_WRITER:
-			backendDesc = "walwriter";
-			break;
-	}
-
-	return backendDesc;
-}
-
 /* ------------------------------------------------------------
  * Local support functions follow
  * ------------------------------------------------------------
@@ -4444,10 +4350,8 @@ PgstatCollectorMain(int argc, char *argv[])
 	pqsignal(SIGCHLD, SIG_DFL);
 	PG_SETMASK(&UnBlockSig);
 
-	/*
-	 * Identify myself via ps
-	 */
-	init_ps_display("stats collector", "", "", "");
+	MyBackendType = B_STATS_COLLECTOR;
+	init_ps_display(NULL);
 
 	/*
 	 * Read in existing stats files or initialize the stats to zero.
@@ -4571,14 +4475,12 @@ PgstatCollectorMain(int argc, char *argv[])
 					break;
 
 				case PGSTAT_MTYPE_RESETSHAREDCOUNTER:
-					pgstat_recv_resetsharedcounter(
-												   &msg.msg_resetsharedcounter,
+					pgstat_recv_resetsharedcounter(&msg.msg_resetsharedcounter,
 												   len);
 					break;
 
 				case PGSTAT_MTYPE_RESETSINGLECOUNTER:
-					pgstat_recv_resetsinglecounter(
-												   &msg.msg_resetsinglecounter,
+					pgstat_recv_resetsinglecounter(&msg.msg_resetsinglecounter,
 												   len);
 					break;
 
@@ -4611,8 +4513,7 @@ PgstatCollectorMain(int argc, char *argv[])
 					break;
 
 				case PGSTAT_MTYPE_RECOVERYCONFLICT:
-					pgstat_recv_recoveryconflict(
-												 &msg.msg_recoveryconflict,
+					pgstat_recv_recoveryconflict(&msg.msg_recoveryconflict,
 												 len);
 					break;
 
@@ -4625,8 +4526,7 @@ PgstatCollectorMain(int argc, char *argv[])
 					break;
 
 				case PGSTAT_MTYPE_CHECKSUMFAILURE:
-					pgstat_recv_checksum_failure(
-												 &msg.msg_checksumfailure,
+					pgstat_recv_checksum_failure(&msg.msg_checksumfailure,
 												 len);
 					break;
 

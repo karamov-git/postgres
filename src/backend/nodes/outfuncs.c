@@ -3,7 +3,7 @@
  * outfuncs.c
  *	  Output functions for Postgres tree nodes.
  *
- * Portions Copyright (c) 1996-2019, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2020, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -783,6 +783,7 @@ _outAgg(StringInfo str, const Agg *node)
 	WRITE_OID_ARRAY(grpOperators, node->numCols);
 	WRITE_OID_ARRAY(grpCollations, node->numCols);
 	WRITE_LONG_FIELD(numGroups);
+	WRITE_UINT64_FIELD(transitionSpace);
 	WRITE_BITMAPSET_FIELD(aggParams);
 	WRITE_NODE_FIELD(groupingSets);
 	WRITE_NODE_FIELD(chain);
@@ -1074,8 +1075,8 @@ _outVar(StringInfo str, const Var *node)
 	WRITE_INT_FIELD(vartypmod);
 	WRITE_OID_FIELD(varcollid);
 	WRITE_UINT_FIELD(varlevelsup);
-	WRITE_UINT_FIELD(varnoold);
-	WRITE_INT_FIELD(varoattno);
+	WRITE_UINT_FIELD(varnosyn);
+	WRITE_INT_FIELD(varattnosyn);
 	WRITE_LOCATION_FIELD(location);
 }
 
@@ -1976,6 +1977,7 @@ _outAggPath(StringInfo str, const AggPath *node)
 	WRITE_ENUM_FIELD(aggstrategy, AggStrategy);
 	WRITE_ENUM_FIELD(aggsplit, AggSplit);
 	WRITE_FLOAT_FIELD(numGroups, "%.0f");
+	WRITE_UINT64_FIELD(transitionSpace);
 	WRITE_NODE_FIELD(groupClause);
 	WRITE_NODE_FIELD(qual);
 }
@@ -2013,6 +2015,7 @@ _outGroupingSetsPath(StringInfo str, const GroupingSetsPath *node)
 	WRITE_ENUM_FIELD(aggstrategy, AggStrategy);
 	WRITE_NODE_FIELD(rollups);
 	WRITE_NODE_FIELD(qual);
+	WRITE_UINT64_FIELD(transitionSpace);
 }
 
 static void
@@ -3071,7 +3074,10 @@ _outRangeTblEntry(StringInfo str, const RangeTblEntry *node)
 			break;
 		case RTE_JOIN:
 			WRITE_ENUM_FIELD(jointype, JoinType);
+			WRITE_INT_FIELD(joinmergedcols);
 			WRITE_NODE_FIELD(joinaliasvars);
+			WRITE_NODE_FIELD(joinleftcols);
+			WRITE_NODE_FIELD(joinrightcols);
 			break;
 		case RTE_FUNCTION:
 			WRITE_NODE_FIELD(functions);

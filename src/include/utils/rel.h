@@ -4,7 +4,7 @@
  *	  POSTGRES relation descriptor (a/k/a relcache entry) definitions.
  *
  *
- * Portions Copyright (c) 1996-2019, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2020, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/utils/rel.h
@@ -20,6 +20,7 @@
 #include "catalog/pg_index.h"
 #include "catalog/pg_publication.h"
 #include "nodes/bitmapset.h"
+#include "partitioning/partdefs.h"
 #include "rewrite/prs2lock.h"
 #include "storage/block.h"
 #include "storage/relfilenode.h"
@@ -94,10 +95,15 @@ typedef struct RelationData
 	List	   *rd_fkeylist;	/* list of ForeignKeyCacheInfo (see below) */
 	bool		rd_fkeyvalid;	/* true if list has been computed */
 
-	struct PartitionKeyData *rd_partkey;	/* partition key, or NULL */
+	/* data managed by RelationGetPartitionKey: */
+	PartitionKey rd_partkey;	/* partition key, or NULL */
 	MemoryContext rd_partkeycxt;	/* private context for rd_partkey, if any */
-	struct PartitionDescData *rd_partdesc;	/* partitions, or NULL */
+
+	/* data managed by RelationGetPartitionDesc: */
+	PartitionDesc rd_partdesc;	/* partition descriptor, or NULL */
 	MemoryContext rd_pdcxt;		/* private context for rd_partdesc, if any */
+
+	/* data managed by RelationGetPartitionQual: */
 	List	   *rd_partcheck;	/* partition CHECK quals */
 	bool		rd_partcheckvalid;	/* true if list has been computed */
 	MemoryContext rd_partcheckcxt;	/* private cxt for rd_partcheck, if any */
@@ -158,7 +164,7 @@ typedef struct RelationData
 	Oid		   *rd_opfamily;	/* OIDs of op families for each index col */
 	Oid		   *rd_opcintype;	/* OIDs of opclass declared input data types */
 	RegProcedure *rd_support;	/* OIDs of support procedures */
-	struct FmgrInfo *rd_supportinfo; /* lookup info for support procedures */
+	struct FmgrInfo *rd_supportinfo;	/* lookup info for support procedures */
 	int16	   *rd_indoption;	/* per-column AM-specific flags */
 	List	   *rd_indexprs;	/* index expression trees, if any */
 	List	   *rd_indpred;		/* index predicate tree, if any */
@@ -595,18 +601,6 @@ typedef struct ViewOptions
 	(XLogLogicalInfoActive() && \
 	 RelationNeedsWAL(relation) && \
 	 !IsCatalogRelation(relation))
-
-/*
- * RelationGetPartitionKey
- *		Returns the PartitionKey of a relation
- */
-#define RelationGetPartitionKey(relation) ((relation)->rd_partkey)
-
-/*
- * RelationGetPartitionDesc
- *		Returns partition descriptor for a relation.
- */
-#define RelationGetPartitionDesc(relation) ((relation)->rd_partdesc)
 
 /* routines in utils/cache/relcache.c */
 extern void RelationIncrementReferenceCount(Relation rel);

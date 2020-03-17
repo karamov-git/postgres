@@ -3,7 +3,7 @@
  * proc.c
  *	  routines to manage per-process shared memory data structure
  *
- * Portions Copyright (c) 1996-2019, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2020, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -851,7 +851,7 @@ ProcKill(int code, Datum arg)
 
 	/*
 	 * Detach from any lock group of which we are a member.  If the leader
-	 * exist before all other group members, it's PGPROC will remain allocated
+	 * exist before all other group members, its PGPROC will remain allocated
 	 * until the last group process exits; that process must return the
 	 * leader's PGPROC to the appropriate list.
 	 */
@@ -1149,10 +1149,8 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 				}
 				/* I must go before this waiter.  Check special case. */
 				if ((lockMethodTable->conflictTab[lockmode] & aheadRequests) == 0 &&
-					LockCheckConflicts(lockMethodTable,
-									   lockmode,
-									   lock,
-									   proclock) == STATUS_OK)
+					!LockCheckConflicts(lockMethodTable, lockmode, lock,
+										proclock))
 				{
 					/* Skip the wait and just grant myself the lock. */
 					GrantLock(lock, proclock, lockmode);
@@ -1648,10 +1646,8 @@ ProcLockWakeup(LockMethod lockMethodTable, LOCK *lock)
 		 * (b) doesn't conflict with already-held locks.
 		 */
 		if ((lockMethodTable->conflictTab[lockmode] & aheadRequests) == 0 &&
-			LockCheckConflicts(lockMethodTable,
-							   lockmode,
-							   lock,
-							   proc->waitProcLock) == STATUS_OK)
+			!LockCheckConflicts(lockMethodTable, lockmode, lock,
+								proc->waitProcLock))
 		{
 			/* OK to waken */
 			GrantLock(lock, proc->waitProcLock, lockmode);

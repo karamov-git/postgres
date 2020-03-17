@@ -3,7 +3,7 @@
  * planner.c
  *	  The query optimizer external interface.
  *
- * Portions Copyright (c) 1996-2019, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2020, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -4867,13 +4867,8 @@ create_distinct_paths(PlannerInfo *root,
 		allow_hash = false;		/* policy-based decision not to hash */
 	else
 	{
-		Size		hashentrysize;
-
-		/* Estimate per-hash-entry space at tuple width... */
-		hashentrysize = MAXALIGN(cheapest_input_path->pathtarget->width) +
-			MAXALIGN(SizeofMinimalTupleHeader);
-		/* plus the per-hash-entry overhead */
-		hashentrysize += hash_agg_entry_size(0);
+		Size		hashentrysize = hash_agg_entry_size(
+			0, cheapest_input_path->pathtarget->width, 0);
 
 		/* Allow hashing only if hashtable is predicted to fit in work_mem */
 		allow_hash = (hashentrysize * numDistinctRows <= work_mem * 1024L);

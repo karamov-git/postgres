@@ -3,7 +3,7 @@
  * pg_proc.c
  *	  routines to support manipulation of the pg_proc relation
  *
- * Portions Copyright (c) 1996-2019, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2020, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -923,6 +923,8 @@ fmgr_sql_validator(PG_FUNCTION_ARGS)
 			 * verify the result type.
 			 */
 			SQLFunctionParseInfoPtr pinfo;
+			Oid			rettype;
+			TupleDesc	rettupdesc;
 
 			/* But first, set up parameter information */
 			pinfo = prepare_sql_fn_parse_info(tuple, NULL, InvalidOid);
@@ -943,9 +945,12 @@ fmgr_sql_validator(PG_FUNCTION_ARGS)
 			}
 
 			check_sql_fn_statements(querytree_list);
-			(void) check_sql_fn_retval(funcoid, proc->prorettype,
-									   querytree_list,
-									   NULL, NULL);
+
+			(void) get_func_result_type(funcoid, &rettype, &rettupdesc);
+
+			(void) check_sql_fn_retval(querytree_list,
+									   rettype, rettupdesc,
+									   false, NULL);
 		}
 
 		error_context_stack = sqlerrcontext.previous;
@@ -1166,7 +1171,7 @@ oid_array_to_list(Datum datum)
 
 	deconstruct_array(array,
 					  OIDOID,
-					  sizeof(Oid), true, 'i',
+					  sizeof(Oid), true, TYPALIGN_INT,
 					  &values, NULL, &nelems);
 	for (i = 0; i < nelems; i++)
 		result = lappend_oid(result, values[i]);
